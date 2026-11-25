@@ -59,7 +59,7 @@ pipeline {
                     int result = sh(
                         script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
 			      -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
@@ -91,7 +91,7 @@ pipeline {
                     int result = sh(
                         script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
 			      -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
@@ -123,7 +123,7 @@ pipeline {
                     int result = sh(
                         script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
                               -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
@@ -155,7 +155,7 @@ pipeline {
                     int gateResult = sh(
                         script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
 			      -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
