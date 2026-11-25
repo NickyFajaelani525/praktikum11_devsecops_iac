@@ -24,6 +24,7 @@ spec:
       containers:
         - name: webapp
           image: nginx:1.25.3
+          imagePullPolicy: Always
           securityContext:
             privileged: false
             allowPrivilegeEscalation: false
