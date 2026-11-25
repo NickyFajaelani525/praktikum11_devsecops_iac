@@ -60,7 +60,7 @@ pipeline {
                         script: """
                             docker run --rm \
                               --user "\$(id -u):\$(id -g)" \
-			      -e HOME=/tmp \
+                              -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
@@ -92,7 +92,7 @@ pipeline {
                         script: """
                             docker run --rm \
                               --user "\$(id -u):\$(id -g)" \
-			      -e HOME=/tmp \
+                              -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
@@ -152,24 +152,16 @@ pipeline {
         stage('Security Gate') {
             steps {
                 script {
-                    int gateResult = sh(
-                        script: """
-                            docker run --rm \
-                              --user "\$(id -u):\$(id -g)" \
-			      -e HOME=/tmp \
-                              --volumes-from jenkins \
-                              -w "\$WORKSPACE" \
-                              --entrypoint python3 \
-                              "$CHECKOV_IMAGE" \
-                              -c '
-import json
+                    // Script Python ditulis ke file dulu (string ''' tidak di-interpolasi Groovy),
+                    // jadi tidak ada lagi masalah single quote / escape antara Groovy, shell, dan Python.
+                    writeFile file: '.ci/security_gate.py', text: '''import json
 import sys
 from pathlib import Path
 
 files = [
     "reports/terraform/checkov-terraform.json",
     "reports/kubernetes/checkov-kubernetes.json",
-    "reports/dockerfile/checkov-dockerfile.json"
+    "reports/dockerfile/checkov-dockerfile.json",
 ]
 
 blocked = []
@@ -211,8 +203,9 @@ for filename in files:
             severity = str(finding.get("severity") or "").upper()
             check_id = finding.get("check_id", "UNKNOWN")
             resource = finding.get("resource", "UNKNOWN")
+            label = severity or "UNCLASSIFIED"
 
-            print(f"{severity or 'UNCLASSIFIED'} | {check_id} | {resource}")
+            print(f"{label} | {check_id} | {resource}")
 
             if severity in ("HIGH", "CRITICAL"):
                 blocked.append((severity, check_id, resource))
@@ -228,7 +221,18 @@ if blocked or unknown:
     sys.exit(1)
 
 sys.exit(0)
-'
+'''
+
+                    int gateResult = sh(
+                        script: """
+                            docker run --rm \
+                              --user "\$(id -u):\$(id -g)" \
+                              -e HOME=/tmp \
+                              --volumes-from jenkins \
+                              -w "\$WORKSPACE" \
+                              --entrypoint python3 \
+                              "$CHECKOV_IMAGE" \
+                              .ci/security_gate.py
                         """,
                         returnStatus: true
                     )
