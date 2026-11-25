@@ -13,10 +13,6 @@ pipeline {
         GITHUB_OWNER = 'NickyFajaelani525'
         GITHUB_REPO = 'praktikum11_devsecops_iac'
         GITHUB_CREDENTIALS = 'github-token'
-
-        SECURITY_GATE = 'PENDING'
-        SCAN_ERROR = 'false'
-        SCAN_COMMIT = ''
     }
 
     stages {
@@ -24,6 +20,20 @@ pipeline {
             steps {
                 echo 'Cleaning Jenkins workspace...'
                 deleteDir()
+            }
+        }
+
+        stage('Initialize Pipeline State') {
+            steps {
+                script {
+                    // Mutable pipeline state is initialized here, not in declarative environment.
+                    env.SECURITY_GATE = 'PENDING'
+                    env.SCAN_ERROR = 'false'
+                    env.SCAN_COMMIT = ''
+
+                    echo 'Pipeline state initialized.'
+                    echo "Initial Security Gate: ${env.SECURITY_GATE}"
+                }
             }
         }
 
@@ -215,6 +225,15 @@ pipeline {
                 // Evaluate final Jenkins result only after all stages have completed.
                 def finalBuildResult = currentBuild.currentResult ?: 'FAILURE'
                 def finalGateResult = env.SECURITY_GATE ?: 'PENDING'
+                def finalCommit = env.SCAN_COMMIT?.trim()
+
+                if (!finalCommit) {
+                    finalCommit = sh(
+                        script: 'git rev-parse HEAD',
+                        returnStdout: true
+                    ).trim()
+                    env.SCAN_COMMIT = finalCommit
+                }
 
                 // GitHub is successful only if the Security Gate AND the full pipeline pass.
                 def githubState = (
@@ -230,9 +249,9 @@ pipeline {
                 echo "Jenkins Result: ${finalBuildResult}"
                 echo "Security Gate: ${finalGateResult}"
                 echo "GitHub Status: ${githubState}"
-                echo "Commit: ${env.SCAN_COMMIT}"
+                echo "Commit: ${finalCommit}"
 
-                if (env.SCAN_COMMIT?.trim()) {
+                if (finalCommit) {
                     withCredentials([
                         string(
                             credentialsId: GITHUB_CREDENTIALS,
@@ -243,13 +262,18 @@ pipeline {
                             "STATUS_STATE=${githubState}",
                             "STATUS_DESCRIPTION=${githubDescription}",
                             "STATUS_TARGET_URL=${env.BUILD_URL}",
-                            "STATUS_API_URL=https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/statuses/${env.SCAN_COMMIT}"
+                            "STATUS_API_URL=https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/statuses/${finalCommit}"
                         ]) {
                             sh '''
                                 set -eu
 
                                 docker run --rm \
                                   --volumes-from jenkins \
+                                  -e GITHUB_TOKEN \
+                                  -e STATUS_STATE \
+                                  -e STATUS_DESCRIPTION \
+                                  -e STATUS_TARGET_URL \
+                                  -e STATUS_API_URL \
                                   curlimages/curl:8.12.1 \
                                   --fail-with-body --silent --show-error \
                                   -X POST \
