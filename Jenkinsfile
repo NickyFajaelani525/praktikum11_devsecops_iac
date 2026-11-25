@@ -152,77 +152,6 @@ pipeline {
         stage('Security Gate') {
             steps {
                 script {
-                    // Script Python ditulis ke file dulu (string ''' tidak di-interpolasi Groovy),
-                    // jadi tidak ada lagi masalah single quote / escape antara Groovy, shell, dan Python.
-                    writeFile file: '.ci/security_gate.py', text: '''import json
-import sys
-from pathlib import Path
-
-files = [
-    "reports/terraform/checkov-terraform.json",
-    "reports/kubernetes/checkov-kubernetes.json",
-    "reports/dockerfile/checkov-dockerfile.json",
-]
-
-blocked = []
-unknown = []
-total = 0
-
-for filename in files:
-    path = Path(filename)
-
-    if not path.is_file():
-        print(f"ERROR: Report missing: {filename}")
-        sys.exit(2)
-
-    try:
-        data = json.loads(path.read_text())
-    except Exception as exc:
-        print(f"ERROR: Invalid JSON in {filename}: {exc}")
-        sys.exit(2)
-
-    datasets = data if isinstance(data, list) else [data]
-
-    for dataset in datasets:
-        if not isinstance(dataset, dict):
-            print(f"ERROR: Unexpected JSON structure: {filename}")
-            sys.exit(2)
-
-        results = dataset.get("results", {})
-        if not isinstance(results, dict):
-            print(f"ERROR: Missing results object: {filename}")
-            sys.exit(2)
-
-        failed = results.get("failed_checks", [])
-        if not isinstance(failed, list):
-            print(f"ERROR: Invalid failed_checks: {filename}")
-            sys.exit(2)
-
-        for finding in failed:
-            total += 1
-            severity = str(finding.get("severity") or "").upper()
-            check_id = finding.get("check_id", "UNKNOWN")
-            resource = finding.get("resource", "UNKNOWN")
-            label = severity or "UNCLASSIFIED"
-
-            print(f"{label} | {check_id} | {resource}")
-
-            if severity in ("HIGH", "CRITICAL"):
-                blocked.append((severity, check_id, resource))
-            elif severity not in ("LOW", "MEDIUM"):
-                unknown.append((check_id, resource))
-
-print()
-print(f"Total failed checks: {total}")
-print(f"HIGH/CRITICAL findings: {len(blocked)}")
-print(f"Unclassified findings: {len(unknown)}")
-
-if blocked or unknown:
-    sys.exit(1)
-
-sys.exit(0)
-'''
-
                     int gateResult = sh(
                         script: """
                             docker run --rm \
@@ -232,7 +161,7 @@ sys.exit(0)
                               -w "\$WORKSPACE" \
                               --entrypoint python3 \
                               "$CHECKOV_IMAGE" \
-                              .ci/security_gate.py
+                              scripts/checkov_security_gate.py
                         """,
                         returnStatus: true
                     )
@@ -248,7 +177,6 @@ sys.exit(0)
                         ) {
                             error('Pipeline blocked by Checkov Security Gate.')
                         }
-
                     } else {
                         env.SECURITY_GATE = 'PASS'
                         echo 'SECURITY GATE: PASS'
