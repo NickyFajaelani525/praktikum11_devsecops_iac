@@ -11,29 +11,20 @@ pipeline {
         CHECKOV_IMAGE = 'bridgecrew/checkov@sha256:89a4c477508225cdc3ed8a23d15c7e0d9d3029bc8ae192b7f113a6ff5f210c94'
 
         GITHUB_OWNER = 'NickyFajaelani525'
-        GITHUB_REPO = 'praktikum11_devsecops_iac'
+        GITHUB_REPO  = 'praktikum11_devsecops_iac'
+
         GITHUB_CREDENTIALS = 'github-token'
+
+        SECURITY_GATE = 'PENDING'
+        SCAN_ERROR = 'false'
     }
 
     stages {
+
         stage('Clean WS') {
             steps {
                 echo 'Cleaning Jenkins workspace...'
                 deleteDir()
-            }
-        }
-
-        stage('Initialize Pipeline State') {
-            steps {
-                script {
-                    // Mutable pipeline state is initialized here, not in declarative environment.
-                    env.SECURITY_GATE = 'PENDING'
-                    env.SCAN_ERROR = 'false'
-                    env.SCAN_COMMIT = ''
-
-                    echo 'Pipeline state initialized.'
-                    echo "Initial Security Gate: ${env.SECURITY_GATE}"
-                }
             }
         }
 
@@ -42,28 +33,22 @@ pipeline {
                 checkout scm
 
                 script {
-                    env.SCAN_COMMIT = sh(
-                        script: 'git rev-parse HEAD',
-                        returnStdout: true
-                    ).trim()
-
-                    echo "Repository: ${env.GITHUB_OWNER}/${env.GITHUB_REPO}"
-                    echo "Commit: ${env.SCAN_COMMIT}"
+                    echo "Repository: ${GITHUB_OWNER}/${GITHUB_REPO}"
+                    echo "Commit: ${env.GIT_COMMIT}"
                     echo "Branch: ${env.GIT_BRANCH}"
                     echo "Workspace: ${env.WORKSPACE}"
                 }
 
                 sh '''
-                    set -eu
                     echo "=== Repository Structure ==="
                     ls -lah
+
                     echo "=== Required Directories ==="
                     test -d terraform
                     test -d kubernetes
                     test -d dockerfile
-                    test -f scripts/checkov_security_gate.py
-                    mkdir -p reports/terraform reports/kubernetes reports/dockerfile
-                    echo "Repository structure is valid."
+
+                    echo "All required directories exist."
                 '''
             }
         }
@@ -72,12 +57,12 @@ pipeline {
             steps {
                 script {
                     int result = sh(
-                        script: '''
+                        script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
                               -e HOME=/tmp \
                               --volumes-from jenkins \
-                              -w "$WORKSPACE" \
+                              -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
                               -d terraform \
                               --framework terraform \
@@ -86,7 +71,7 @@ pipeline {
                               -o sarif \
                               --output-file-path console,reports/terraform/checkov-terraform.json,reports/terraform/checkov-terraform.sarif \
                               --soft-fail
-                        ''',
+                        """,
                         returnStatus: true
                     )
 
@@ -104,12 +89,12 @@ pipeline {
             steps {
                 script {
                     int result = sh(
-                        script: '''
+                        script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
                               -e HOME=/tmp \
                               --volumes-from jenkins \
-                              -w "$WORKSPACE" \
+                              -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
                               -d kubernetes \
                               --framework kubernetes \
@@ -118,7 +103,7 @@ pipeline {
                               -o sarif \
                               --output-file-path console,reports/kubernetes/checkov-kubernetes.json,reports/kubernetes/checkov-kubernetes.sarif \
                               --soft-fail
-                        ''',
+                        """,
                         returnStatus: true
                     )
 
@@ -136,12 +121,12 @@ pipeline {
             steps {
                 script {
                     int result = sh(
-                        script: '''
+                        script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
                               -e HOME=/tmp \
                               --volumes-from jenkins \
-                              -w "$WORKSPACE" \
+                              -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
                               -d dockerfile \
                               --framework dockerfile \
@@ -150,7 +135,7 @@ pipeline {
                               -o sarif \
                               --output-file-path console,reports/dockerfile/checkov-dockerfile.json,reports/dockerfile/checkov-dockerfile.sarif \
                               --soft-fail
-                        ''',
+                        """,
                         returnStatus: true
                     )
 
@@ -168,16 +153,16 @@ pipeline {
             steps {
                 script {
                     int gateResult = sh(
-                        script: '''
+                        script: """
                             docker run --rm \
-                              --user "$(id -u):$(id -g)" \
+                              --user "\$(id -u):\$(id -g)" \
                               -e HOME=/tmp \
                               --volumes-from jenkins \
-                              -w "$WORKSPACE" \
+                              -w "\$WORKSPACE" \
                               --entrypoint python3 \
                               "$CHECKOV_IMAGE" \
                               scripts/checkov_security_gate.py
-                        ''',
+                        """,
                         returnStatus: true
                     )
 
@@ -211,88 +196,59 @@ pipeline {
                 )
 
                 sh '''
-                    set -eu
                     echo "=== Generated Reports ==="
                     find reports -type f -print
                 '''
             }
         }
-    }
 
-    post {
-        always {
-            script {
-                // Evaluate final Jenkins result only after all stages have completed.
-                def finalBuildResult = currentBuild.currentResult ?: 'FAILURE'
-                def finalGateResult = env.SECURITY_GATE ?: 'PENDING'
-                def finalCommit = env.SCAN_COMMIT?.trim()
+        stage('GitHub Status') {
+            steps {
+                script {
+                    def statusState =
+                        env.SECURITY_GATE == 'PASS' ? 'success' : 'failure'
 
-                if (!finalCommit) {
-                    finalCommit = sh(
-                        script: 'git rev-parse HEAD',
-                        returnStdout: true
-                    ).trim()
-                    env.SCAN_COMMIT = finalCommit
-                }
+                    def statusDescription =
+                        env.SECURITY_GATE == 'PASS'
+                        ? 'Checkov security gate passed'
+                        : 'Checkov security gate failed'
 
-                // GitHub is successful only if the Security Gate AND the full pipeline pass.
-                def githubState = (
-                    finalGateResult == 'PASS' &&
-                    finalBuildResult == 'SUCCESS'
-                ) ? 'success' : 'failure'
-
-                def githubDescription = (githubState == 'success')
-                    ? 'Checkov security gate and pipeline passed'
-                    : "Pipeline ${finalBuildResult}; Security Gate ${finalGateResult}"
-
-                echo '=== Final Pipeline Status ==='
-                echo "Jenkins Result: ${finalBuildResult}"
-                echo "Security Gate: ${finalGateResult}"
-                echo "GitHub Status: ${githubState}"
-                echo "Commit: ${finalCommit}"
-
-                if (finalCommit) {
                     withCredentials([
                         string(
                             credentialsId: GITHUB_CREDENTIALS,
                             variable: 'GITHUB_TOKEN'
                         )
                     ]) {
-                        withEnv([
-                            "STATUS_STATE=${githubState}",
-                            "STATUS_DESCRIPTION=${githubDescription}",
-                            "STATUS_TARGET_URL=${env.BUILD_URL}",
-                            "STATUS_API_URL=https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/statuses/${finalCommit}"
-                        ]) {
-                            sh '''
-                                set -eu
+                        sh """
+                            set +x
 
-                                docker run --rm \
-                                  --volumes-from jenkins \
-                                  -e GITHUB_TOKEN \
-                                  -e STATUS_STATE \
-                                  -e STATUS_DESCRIPTION \
-                                  -e STATUS_TARGET_URL \
-                                  -e STATUS_API_URL \
-                                  curlimages/curl:8.12.1 \
-                                  --fail-with-body --silent --show-error \
+                            docker run --rm \
+                              --volumes-from jenkins \
+                              -e GITHUB_TOKEN="\$GITHUB_TOKEN" \
+                              --entrypoint /bin/sh \
+                              curlimages/curl:8.12.1 \
+                              -c '
+                                curl --fail-with-body --silent --show-error \
                                   -X POST \
                                   -H "Accept: application/vnd.github+json" \
-                                  -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                  -H "Authorization: Bearer \$GITHUB_TOKEN" \
                                   -H "X-GitHub-Api-Version: 2022-11-28" \
-                                  "$STATUS_API_URL" \
-                                  -d "{\"state\":\"$STATUS_STATE\",\"context\":\"jenkins/checkov-security-gate\",\"description\":\"$STATUS_DESCRIPTION\",\"target_url\":\"$STATUS_TARGET_URL\"}"
-                            '''
-                        }
+                                  https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/statuses/${GIT_COMMIT} \
+                                  -d "{\\"state\\":\\"${statusState}\\",\\"context\\":\\"jenkins/checkov-security-gate\\",\\"description\\":\\"${statusDescription}\\",\\"target_url\\":\\"${BUILD_URL}\\"}"
+                              '
+                        """
                     }
 
-                    echo "GitHub commit status published: ${githubState}"
-                } else {
-                    echo 'WARNING: No checked-out commit SHA is available; GitHub status was not published.'
+                    echo "GitHub commit status published: ${statusState}"
                 }
             }
+        }
+    }
 
+    post {
+        always {
             echo 'Pipeline execution completed.'
+            echo "Final Security Gate: ${env.SECURITY_GATE}"
         }
     }
 }
