@@ -1,1 +1,1 @@
-Praktikum 11 Static IaC Scanning
+Praktikum 11 Static IaC Scanning Rabu Pagi
