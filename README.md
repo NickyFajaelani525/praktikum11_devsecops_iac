@@ -1,1 +1,1 @@
-Praktikum 11 Static IaC Scanning cihuyy
+Praktikum 11 Static IaC Scanning
