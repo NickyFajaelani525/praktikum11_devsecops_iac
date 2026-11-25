@@ -59,6 +59,8 @@ pipeline {
                     int result = sh(
                         script: """
                             docker run --rm \
+                              --user "$(id -u):$(id -g)" \
+			      -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
@@ -89,6 +91,8 @@ pipeline {
                     int result = sh(
                         script: """
                             docker run --rm \
+                              --user "$(id -u):$(id -g)" \
+			      -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
@@ -119,6 +123,8 @@ pipeline {
                     int result = sh(
                         script: """
                             docker run --rm \
+                              --user "$(id -u):$(id -g)" \
+                              -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
                               "$CHECKOV_IMAGE" \
@@ -149,6 +155,8 @@ pipeline {
                     int gateResult = sh(
                         script: """
                             docker run --rm \
+                              --user "$(id -u):$(id -g)" \
+			      -e HOME=/tmp \
                               --volumes-from jenkins \
                               -w "\$WORKSPACE" \
                               --entrypoint python3 \
