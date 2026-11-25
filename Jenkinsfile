@@ -1,3 +1,8 @@
+// State pipeline disimpan sebagai variabel Groovy global (bukan di environment {}),
+// karena variabel di block environment {} tidak bisa diubah lewat env.X = ... di script {}
+def securityGate = 'PENDING'
+def scanError    = false
+
 pipeline {
     agent any
 
@@ -14,9 +19,6 @@ pipeline {
         GITHUB_REPO  = 'praktikum11_devsecops_iac'
 
         GITHUB_CREDENTIALS = 'github-token'
-
-        SECURITY_GATE = 'PENDING'
-        SCAN_ERROR = 'false'
     }
 
     stages {
@@ -76,7 +78,7 @@ pipeline {
                     )
 
                     if (result != 0) {
-                        env.SCAN_ERROR = 'true'
+                        scanError = true
                         echo "Terraform scan execution error. Exit code: ${result}"
                     } else {
                         echo 'Terraform scan completed.'
@@ -108,7 +110,7 @@ pipeline {
                     )
 
                     if (result != 0) {
-                        env.SCAN_ERROR = 'true'
+                        scanError = true
                         echo "Kubernetes scan execution error. Exit code: ${result}"
                     } else {
                         echo 'Kubernetes scan completed.'
@@ -140,7 +142,7 @@ pipeline {
                     )
 
                     if (result != 0) {
-                        env.SCAN_ERROR = 'true'
+                        scanError = true
                         echo "Dockerfile scan execution error. Exit code: ${result}"
                     } else {
                         echo 'Dockerfile scan completed.'
@@ -166,8 +168,8 @@ pipeline {
                         returnStatus: true
                     )
 
-                    if (env.SCAN_ERROR == 'true' || gateResult != 0) {
-                        env.SECURITY_GATE = 'FAIL'
+                    if (scanError || gateResult != 0) {
+                        securityGate = 'FAIL'
                         echo 'SECURITY GATE: FAIL'
 
                         catchError(
@@ -178,7 +180,7 @@ pipeline {
                             error('Pipeline blocked by Checkov Security Gate.')
                         }
                     } else {
-                        env.SECURITY_GATE = 'PASS'
+                        securityGate = 'PASS'
                         echo 'SECURITY GATE: PASS'
                     }
                 }
@@ -201,17 +203,23 @@ pipeline {
                 '''
             }
         }
+    }
 
-        stage('GitHub Status') {
-            steps {
-                script {
-                    def statusState =
-                        env.SECURITY_GATE == 'PASS' ? 'success' : 'failure'
+    post {
+        always {
+            echo 'Pipeline execution completed.'
+            echo "Final Security Gate: ${securityGate}"
 
-                    def statusDescription =
-                        env.SECURITY_GATE == 'PASS'
-                        ? 'Checkov security gate passed'
-                        : 'Checkov security gate failed'
+            // Status GitHub dikirim di post { always } supaya selalu terkirim,
+            // termasuk kalau pipeline crash sebelum stage Security Gate.
+            script {
+                if (!env.GIT_COMMIT) {
+                    echo 'GIT_COMMIT kosong (checkout belum jalan), GitHub status dilewati.'
+                } else {
+                    def statusState = (securityGate == 'PASS') ? 'success' : 'failure'
+                    def statusDescription = (securityGate == 'PASS')
+                            ? 'Checkov security gate passed'
+                            : 'Checkov security gate failed'
 
                     withCredentials([
                         string(
@@ -242,13 +250,6 @@ pipeline {
                     echo "GitHub commit status published: ${statusState}"
                 }
             }
-        }
-    }
-
-    post {
-        always {
-            echo 'Pipeline execution completed.'
-            echo "Final Security Gate: ${env.SECURITY_GATE}"
         }
     }
 }
