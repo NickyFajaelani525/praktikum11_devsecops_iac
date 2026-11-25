@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Evaluate Checkov JSON reports using the lecturer's Check ID severity mapping."""
+"""
+Evaluate Checkov JSON reports using:
+1. The lecturer's official severity mapping for the specified Check IDs.
+2. Explicitly labelled hypothetical/internal severity mappings for other
+   failed Check IDs observed in Build #10.
+
+IMPORTANT:
+- HYPOTHETICAL severities are local risk-triage decisions, not official
+  Checkov severity metadata and not part of the lecturer's 16-ID mapping.
+- Unknown future Check IDs fail closed and stop evaluation.
+"""
 
 import json
 import sys
@@ -11,8 +21,9 @@ REPORTS = {
     "Dockerfile": ("reports/dockerfile/checkov-dockerfile.json", "dockerfile"),
 }
 
-# Severity mapping taken from the lecturer's Checkov practicum list.
-SEVERITY_BY_CHECK_ID = {
+# Official severity mapping supplied in the lecturer's practicum material.
+# Keep this mapping separate from the internal/hypothetical mapping below.
+OFFICIAL_SEVERITY_BY_CHECK_ID = {
     # AWS / Terraform
     "CKV_AWS_20": "CRITICAL",
     "CKV_AWS_57": "CRITICAL",
@@ -34,10 +45,71 @@ SEVERITY_BY_CHECK_ID = {
     "CKV_DOCKER_7": "MEDIUM",
 }
 
+# Internal severity proposals for the additional failed Check IDs observed
+# in Build #10. These are NOT official Checkov or lecturer severity values.
+HYPOTHETICAL_SEVERITY_BY_CHECK_ID = {
+    # AWS / Terraform - IAM
+    "CKV_AWS_62": "CRITICAL",
+    "CKV_AWS_287": "HIGH",
+    "CKV_AWS_288": "HIGH",
+    "CKV_AWS_289": "CRITICAL",
+    "CKV_AWS_286": "CRITICAL",
+    "CKV_AWS_63": "CRITICAL",
+    "CKV_AWS_355": "HIGH",
+    "CKV_AWS_290": "HIGH",
+    "CKV2_AWS_40": "CRITICAL",
+
+    # AWS / Terraform - RDS
+    "CKV_AWS_129": "MEDIUM",
+    "CKV_AWS_226": "MEDIUM",
+    "CKV_AWS_16": "HIGH",
+    "CKV_AWS_118": "MEDIUM",
+    "CKV_AWS_161": "MEDIUM",
+    "CKV_AWS_293": "HIGH",
+    "CKV_AWS_157": "MEDIUM",
+    "CKV2_AWS_60": "LOW",
+
+    # AWS / Terraform - EC2
+    "CKV_AWS_126": "MEDIUM",
+    "CKV_AWS_135": "LOW",
+    "CKV2_AWS_41": "MEDIUM",
+
+    # AWS / Terraform - S3 and networking
+    "CKV_AWS_23": "LOW",
+    "CKV_AWS_144": "MEDIUM",
+    "CKV_AWS_18": "MEDIUM",
+    "CKV2_AWS_61": "LOW",
+    "CKV2_AWS_62": "MEDIUM",
+    "CKV2_AWS_6": "HIGH",
+    "CKV2_AWS_5": "MEDIUM",
+
+    # Kubernetes
+    "CKV_K8S_11": "MEDIUM",
+    "CKV_K8S_10": "MEDIUM",
+    "CKV_K8S_21": "MEDIUM",
+    "CKV_K8S_28": "HIGH",
+    "CKV_K8S_43": "MEDIUM",
+    "CKV_K8S_14": "HIGH",
+    "CKV_K8S_8": "MEDIUM",
+    "CKV_K8S_13": "MEDIUM",
+    "CKV_K8S_12": "MEDIUM",
+    "CKV_K8S_37": "HIGH",
+    "CKV_K8S_29": "HIGH",
+    "CKV_K8S_22": "MEDIUM",
+    "CKV_K8S_9": "MEDIUM",
+    "CKV_K8S_40": "MEDIUM",
+    "CKV_K8S_31": "HIGH",
+    "CKV_K8S_38": "HIGH",
+    "CKV2_K8S_6": "HIGH",
+}
+
 EXPECTED_FRAMEWORK_BY_PREFIX = {
     "CKV_AWS_": "terraform",
+    "CKV2_AWS_": "terraform",
     "CKV_K8S_": "kubernetes",
+    "CKV2_K8S_": "kubernetes",
     "CKV_DOCKER_": "dockerfile",
+    "CKV2_DOCKER_": "dockerfile",
 }
 
 BLOCKING_SEVERITIES = {"HIGH", "CRITICAL"}
@@ -61,13 +133,49 @@ def load_datasets(path: Path):
     return datasets
 
 
+def get_classification(check_id: str):
+    """Return (severity, classification_source), or (None, None)."""
+    if check_id in OFFICIAL_SEVERITY_BY_CHECK_ID:
+        return OFFICIAL_SEVERITY_BY_CHECK_ID[check_id], "OFFICIAL"
+    if check_id in HYPOTHETICAL_SEVERITY_BY_CHECK_ID:
+        return HYPOTHETICAL_SEVERITY_BY_CHECK_ID[check_id], "HYPOTHETICAL"
+    return None, None
+
+
+def validate_classification_configuration() -> None:
+    overlap = set(OFFICIAL_SEVERITY_BY_CHECK_ID) & set(
+        HYPOTHETICAL_SEVERITY_BY_CHECK_ID
+    )
+    if overlap:
+        fail(f"Check IDs exist in both official and hypothetical maps: {sorted(overlap)}")
+
+    for source, mapping in (
+        ("official", OFFICIAL_SEVERITY_BY_CHECK_ID),
+        ("hypothetical", HYPOTHETICAL_SEVERITY_BY_CHECK_ID),
+    ):
+        invalid = {
+            check_id: severity
+            for check_id, severity in mapping.items()
+            if severity not in ALLOWED_SEVERITIES
+        }
+        if invalid:
+            fail(f"Invalid {source} severity configuration: {invalid}")
+
+
 def main() -> int:
+    validate_classification_configuration()
+
     blockers = []
-    unmapped = []
     totals = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    source_totals = {
+        "OFFICIAL": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
+        "HYPOTHETICAL": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
+    }
     total_failed = 0
 
-    print("=== Checkov Security Gate: Lecturer Check ID Policy ===")
+    print("=== Checkov Security Gate: Official + Hypothetical Classification ===")
+    print("OFFICIAL     = lecturer's 16-ID severity mapping")
+    print("HYPOTHETICAL = internal risk-triage classification; not official Checkov severity")
 
     for label, (filename, expected_framework) in REPORTS.items():
         path = Path(filename)
@@ -79,13 +187,11 @@ def main() -> int:
         framework_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
 
         for dataset in datasets:
-            # Checkov may emit a summary-only object when it generated no report.
-            # For this lab, each input directory is expected to contain scannable IaC.
+            # A summary-only report means Checkov did not produce check results.
             if "results" not in dataset:
                 fail(
                     f"{filename} has no 'results' object. "
-                    "Checkov did not produce check results; verify the target files "
-                    "and framework scan before evaluating the gate."
+                    "Verify the target files and framework scan."
                 )
 
             if dataset.get("check_type") != expected_framework:
@@ -113,12 +219,8 @@ def main() -> int:
             if not isinstance(summary, dict):
                 fail(f"{filename}: missing or invalid summary object")
 
-            # A zero-resource result is not treated as a clean scan.
             if summary.get("resource_count", 0) < 1:
-                fail(
-                    f"{filename}: resource_count is zero. "
-                    "The target directory was not actually evaluated."
-                )
+                fail(f"{filename}: resource_count is zero; target was not evaluated")
 
             if summary.get("parsing_errors", 0):
                 fail(f"{filename}: Checkov reported parsing errors")
@@ -155,18 +257,27 @@ def main() -> int:
                         f"expected {expected_for_id}"
                     )
 
-                severity = SEVERITY_BY_CHECK_ID.get(check_id)
+                severity, classification_source = get_classification(check_id)
                 if severity is None:
-                    print(f"UNMAPPED | {check_id} | {resource}")
-                    unmapped.append((label, check_id, resource))
-                    continue
+                    fail(
+                        f"No severity classification configured for {check_id} "
+                        f"in {label} ({resource}). Add a reviewed mapping before "
+                        "allowing this finding through the gate."
+                    )
 
                 framework_counts[severity] += 1
                 totals[severity] += 1
-                print(f"{severity:8} | {check_id} | {resource}")
+                source_totals[classification_source][severity] += 1
+
+                print(
+                    f"{severity:8} | {classification_source:11} | "
+                    f"{check_id} | {resource}"
+                )
 
                 if severity in BLOCKING_SEVERITIES:
-                    blockers.append((label, severity, check_id, resource))
+                    blockers.append(
+                        (label, severity, classification_source, check_id, resource)
+                    )
 
         print(
             f"{label}: failed={framework_failed}, "
@@ -180,19 +291,25 @@ def main() -> int:
     print(f"Total failed checks: {total_failed}")
     for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
         print(f"{severity}: {totals[severity]}")
-    print(f"HIGH/CRITICAL blockers: {len(blockers)}")
-    print(f"Unmapped Check IDs: {len(unmapped)}")
 
-    if blockers or unmapped:
+    print("\nClassification source breakdown:")
+    for source in ("OFFICIAL", "HYPOTHETICAL"):
+        source_count = sum(source_totals[source].values())
+        print(f"{source}: {source_count}")
+        for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+            print(f"  {severity}: {source_totals[source][severity]}")
+
+    print(f"\nHIGH/CRITICAL blockers: {len(blockers)}")
+    print("Unclassified Check IDs: 0")
+
+    if blockers:
         print("\nSECURITY GATE: FAIL")
-        if blockers:
-            print("Blocking findings:")
-            for label, severity, check_id, resource in blockers:
-                print(f"  - {label}: {severity} {check_id} ({resource})")
-        if unmapped:
-            print("Unmapped findings (fail-closed):")
-            for label, check_id, resource in unmapped:
-                print(f"  - {label}: {check_id} ({resource})")
+        print("Blocking findings:")
+        for label, severity, source, check_id, resource in blockers:
+            print(
+                f"  - {label}: {severity} [{source}] "
+                f"{check_id} ({resource})"
+            )
         return 1
 
     print("\nSECURITY GATE: PASS")
