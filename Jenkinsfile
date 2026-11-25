@@ -13,7 +13,7 @@ pipeline {
         GITHUB_OWNER = 'NickyFajaelani525'
         GITHUB_REPO  = 'praktikum11_devsecops_iac'
 
-        GITHUB_CREDENTIALS = 'github-minisoc'
+        GITHUB_CREDENTIALS = 'github-token'
 
         SECURITY_GATE = 'PENDING'
         SCAN_ERROR = 'false'
@@ -181,7 +181,6 @@ for filename in files:
         print(f"ERROR: Invalid JSON in {filename}: {exc}")
         sys.exit(2)
 
-    # Checkov JSON may contain one object or a list of framework results.
     datasets = data if isinstance(data, list) else [data]
 
     for dataset in datasets:
@@ -229,6 +228,15 @@ sys.exit(0)
                     if (env.SCAN_ERROR == 'true' || gateResult != 0) {
                         env.SECURITY_GATE = 'FAIL'
                         echo 'SECURITY GATE: FAIL'
+
+                        catchError(
+                            buildResult: 'FAILURE',
+                            stageResult: 'FAILURE',
+                            message: 'Checkov Security Gate failed.'
+                        ) {
+                            error('Pipeline blocked by Checkov Security Gate.')
+                        }
+
                     } else {
                         env.SECURITY_GATE = 'PASS'
                         echo 'SECURITY GATE: PASS'
@@ -272,6 +280,8 @@ sys.exit(0)
                         )
                     ]) {
                         sh """
+                            set +x
+
                             docker run --rm \
                               --volumes-from jenkins \
                               -e GITHUB_TOKEN="\$GITHUB_TOKEN" \
@@ -289,9 +299,7 @@ sys.exit(0)
                         """
                     }
 
-                    if (env.SECURITY_GATE != 'PASS') {
-                        error('Pipeline blocked by Checkov Security Gate.')
-                    }
+                    echo "GitHub commit status published: ${statusState}"
                 }
             }
         }
